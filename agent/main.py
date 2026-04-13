@@ -45,7 +45,6 @@ from pydantic import BaseModel
 
 from agent import run_agent
 from skill_loader import load_skills_for_session
-from scraper_inputs import build_scraper_inputs
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,23 +70,15 @@ def _load_and_run(
     """
     Runs inside a ThreadPoolExecutor worker (blocking context).
 
-    Step 1 — Build + emit scraper_engine_inputs (Haiku-powered, query-aware).
-    Step 2 — Download skills from S3 for this session_id.
-    Step 3 — Run the agent (fresh asyncio loop, avoids uvicorn conflict).
-    Step 4 — Emit final_response, then sentinel to signal done.
+    Step 1 — Download skills from S3 for this session_id.
+    Step 2 — Run the agent (fresh asyncio loop, avoids uvicorn conflict).
+    Step 3 — Emit final_response, then sentinel to signal done.
     """
 
     def _put(event: Dict[str, Any]) -> None:
         caller_loop.call_soon_threadsafe(event_queue.put_nowait, event)
 
-    # ── Step 1: Build + emit scraper_engine_inputs ──────────────────────────
-    # Emitted FIRST — before skill loading, before agent runs.
-    logger.info(f"[{session_id}] Building scraper inputs for query: {query_text[:60]}")
-    scraper_payload = build_scraper_inputs(query_text)
-    _put({"type": "scraper_engine_inputs", **scraper_payload})
-    logger.info(f"[{session_id}] scraper_engine_inputs emitted: job_id={scraper_payload.get('job_id')}")
-
-    # ── Step 2: S3 skill loading ────────────────────────────────────────────
+    # ── Step 1: S3 skill loading ────────────────────────────────────────────
     _put({"type": "skill_loading", "session_id": session_id,
           "message": f"Loading skills from S3 for session: {session_id}"})
 
@@ -98,7 +89,7 @@ def _load_and_run(
     _put({"type": "skills_ready", "skills": skill_names, "session_id": session_id,
           "message": f"{len(skill_names)} skill(s) active — starting agent"})
 
-    # ── Step 2: Run agent ───────────────────────────────────────────────────
+    # ── Step 2: Run agent ──────────────────────────────────────────────────
     async def _on_event(event: Dict[str, Any]) -> None:
         _put(event)
 
@@ -106,7 +97,7 @@ def _load_and_run(
         run_agent(query_text=query_text, session_id=session_id, on_event=_on_event)
     )
 
-    # ── Step 3: Emit final_response before signalling done ──────────────────
+    # ── Step 3: Emit final_response before signalling done ─────────────────
     _put({
         "type": "final_response",
         "session_id":      session_id,

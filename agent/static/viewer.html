@@ -166,7 +166,7 @@
       overflow-y: auto;
     }
 
-    /* ── Right pane: live video ──────────────────────────────────────────── */
+    /* ── Right pane ──────────────────────────────────────────────────────── */
     #right {
       flex: 1;
       display: flex;
@@ -187,6 +187,30 @@
       justify-content: space-between;
       flex-shrink: 0;
     }
+    /* Activity log — above video */
+    #activity-log {
+      height: 160px;
+      overflow-y: auto;
+      background: #0d1117;
+      border-bottom: 1px solid #30363d;
+      padding: 6px 10px;
+      font-size: 11px;
+      color: #00ff41;
+      font-family: 'Consolas', 'Monaco', monospace;
+      white-space: pre-wrap;
+      word-break: break-all;
+      flex-shrink: 0;
+    }
+    #activity-log::-webkit-scrollbar { width: 4px; }
+    #activity-log::-webkit-scrollbar-thumb { background: #30363d; }
+    /* Video area */
+    #video-wrap {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      min-height: 0;
+    }
     #video-placeholder {
       flex: 1;
       display: flex;
@@ -196,11 +220,10 @@
       color: #484f58;
       gap: 12px;
     }
-    #video-placeholder .icon { font-size: 48px; }
-    #video-placeholder .msg  { font-size: 13px; }
+    #video-placeholder .icon { font-size: 40px; }
+    #video-placeholder .msg  { font-size: 12px; }
     #video-status { font-size: 11px; color: #3fb950; }
     #live-video {
-      flex: 1;
       width: 100%;
       height: 100%;
       object-fit: contain;
@@ -249,21 +272,25 @@
     <div id="events"></div>
   </div>
 
-  <!-- RIGHT: live HLS video of virtual desktop -->
+  <!-- RIGHT: activity log + live HLS video -->
   <div id="right">
     <div id="right-header">
-      <span>🎥 Computer View (Live Video)</span>
+      <span>🎥 Computer View</span>
       <span style="display:flex;gap:8px;align-items:center;">
         <span id="video-status"></span>
         <a id="download-btn" href="/download-recording" target="_blank">⬇ Download MP4</a>
       </span>
     </div>
-    <div id="video-placeholder">
-      <div class="icon">🎥</div>
-      <div class="msg">Loading live video stream...</div>
-      <div style="font-size:11px; color:#484f58; margin-top:4px;">Recorded via ffmpeg x11grab on virtual display</div>
+    <!-- Agent activity log (above video, synced with left pane) -->
+    <div id="activity-log">Waiting for agent...</div>
+    <!-- Live video -->
+    <div id="video-wrap">
+      <div id="video-placeholder">
+        <div class="icon">🎥</div>
+        <div class="msg">Loading video stream...</div>
+      </div>
+      <video id="live-video" autoplay muted playsinline></video>
     </div>
-    <video id="live-video" autoplay muted playsinline></video>
   </div>
 
 </div>
@@ -276,6 +303,14 @@
 
   let screenshotCount = 0;
 
+  // ── Activity log (above video) ───────────────────────────────────────────────
+  function appendActivityLog(text) {
+    const log = document.getElementById('activity-log');
+    const ts  = new Date().toLocaleTimeString('en-US', { hour12: false });
+    log.textContent += `[${ts}] ${text}\n`;
+    log.scrollTop = log.scrollHeight;
+  }
+
   // ── HLS Video Player ─────────────────────────────────────────────────────────
   function initHLS() {
     const video       = document.getElementById('live-video');
@@ -286,14 +321,18 @@
     function showVideo() {
       placeholder.style.display = 'none';
       video.style.display = 'block';
-      video.style.flex    = '1';
+      video.style.width   = '100%';
+      video.style.height  = '100%';
     }
 
     if (Hls.isSupported()) {
       const hls = new Hls({
         lowLatencyMode: true,
-        liveSyncDurationCount: 2,
-        liveMaxLatencyDurationCount: 5,
+        liveSyncDurationCount: 1,
+        liveMaxLatencyDurationCount: 3,
+        maxBufferLength: 4,
+        maxMaxBufferLength: 8,
+        liveDurationInfinity: true,
       });
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -301,28 +340,29 @@
         statusEl.style.color = '#f85149';
         showVideo();
         video.play().catch(() => {});
+        dlBtn.style.display = 'inline-block';
       });
 
       hls.on(Hls.Events.ERROR, (_, data) => {
         if (data.fatal) {
-          statusEl.textContent = 'Retrying...';
-          setTimeout(() => hls.loadSource(hlsUrl), 3000);
+          statusEl.textContent = 'Reconnecting...';
+          statusEl.style.color = '#f0883e';
+          setTimeout(() => { hls.loadSource(hlsUrl); }, 2000);
         }
       });
 
-      // Poll until HLS manifest appears (ffmpeg takes ~4s to write first chunk)
+      // Poll until HLS manifest appears (ffmpeg writes first chunk after ~2s)
       function tryLoad() {
         fetch(hlsUrl, { method: 'HEAD' })
           .then(r => {
             if (r.ok) {
               hls.loadSource(hlsUrl);
               hls.attachMedia(video);
-              dlBtn.style.display = 'inline-block';
             } else {
-              setTimeout(tryLoad, 2000);
+              setTimeout(tryLoad, 1500);
             }
           })
-          .catch(() => setTimeout(tryLoad, 2000));
+          .catch(() => setTimeout(tryLoad, 1500));
       }
       tryLoad();
 
@@ -337,7 +377,7 @@
         dlBtn.style.display = 'inline-block';
       });
     } else {
-      statusEl.textContent = 'HLS not supported in this browser';
+      statusEl.textContent = 'HLS not supported';
     }
   }
   initHLS();
@@ -398,12 +438,6 @@
 
     switch (ev.type) {
 
-      case 'scraper_engine_inputs':
-        div.innerHTML = `${time}<span class="ev-label" style="color:#a371f7">🔍 SCRAPER</span>
-          <b>job</b>: ${ev.job_id} | <b>domain</b>: ${ev.domain} | <b>competitor</b>: ${ev.competitor}
-          <div class="ev-input-block">url: ${ev.source_url}\ngoal: ${ev.goal}</div>`;
-        break;
-
       case 'skill_loading':
         div.innerHTML = `${time}<span class="ev-label" style="color:#3fb950">📦 SKILL LOAD</span>${ev.message || ''}`;
         break;
@@ -423,7 +457,12 @@
         break;
 
       case 'thinking':
-        div.innerHTML = `${time}<span class="ev-label">💭 thinking...</span>`;
+        if (ev.text) {
+          div.innerHTML = `${time}<span class="ev-label">💭 THINKING</span>
+            <pre style="margin:6px 0 0;padding:8px;background:#161b22;border-radius:4px;white-space:pre-wrap;font-size:11px;color:#8b949e;max-height:200px;overflow-y:auto">${escHtml(ev.text)}</pre>`;
+        } else {
+          div.innerHTML = `${time}<span class="ev-label">💭 thinking...</span>`;
+        }
         break;
 
       case 'tool_use':
@@ -467,6 +506,11 @@
         screenshotCount++;
         div.innerHTML = `${time}<span class="ev-label" style="color:#a371f7">📸 SCREENSHOT</span>#${screenshotCount} captured — visible in video feed`;
         break;
+
+      case 'activity_log':
+        // Lightweight text event — goes to activity log above video, not left pane card
+        appendActivityLog(ev.text || '');
+        return;  // skip appending to left-pane events
 
       case 'done':
         div.innerHTML = `${time}<span class="ev-label">🔚 DONE</span>Session complete`;

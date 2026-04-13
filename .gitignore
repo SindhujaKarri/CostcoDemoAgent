@@ -1,0 +1,33 @@
+# ── Secrets — NEVER commit real credentials ───────────────────────────────────
+agent/.env
+.env
+*.env
+!*.env.example
+
+# ── Python bytecode ───────────────────────────────────────────────────────────
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+*.egg-info/
+dist/
+build/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+env/
+.venv/
+__pypackages__/
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── Runtime artefacts ─────────────────────────────────────────────────────────
+*.log
+agent/escalations.jsonl
+
+# ── Excel / data files (large binaries) ──────────────────────────────────────
+data/

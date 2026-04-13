@@ -51,8 +51,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger("AGENT")
 
-_DISPLAY = os.environ.get("DISPLAY", "")   # Set in Docker; empty on Windows
-_SS_PATH = "/tmp/aria_ss.png"
+_DISPLAY    = os.environ.get("DISPLAY", "")   # Set in Docker; empty on Windows
+_SS_PATH    = "/tmp/aria_ss.png"
+_AGENT_LOG  = "/tmp/agent.log"
+
+
+def _log_to_display(text: str) -> None:
+    """Write a line to the xterm activity log visible in the video feed."""
+    if not _DISPLAY:
+        return
+    try:
+        ts = time.strftime("%H:%M:%S")
+        with open(_AGENT_LOG, "a", encoding="utf-8", errors="replace") as f:
+            f.write(f"[{ts}] {text}\n")
+    except Exception:
+        pass
 
 
 async def _take_screenshot() -> Optional[str]:
@@ -352,28 +365,40 @@ async def _process_message(
             counters["skills"] += 1
             sname = inp.get("skill", "unknown")
             logger.info(f"[{cid}] SKILL: {sname}")
+            _log_to_display(f"⚡ SKILL: {sname}")
             if on_event:
                 await on_event({"type": "skill_start", "skill": sname, "input": inp})
-        else:
+                await on_event({"type": "activity_log", "text": f"⚡ SKILL: {sname}"})
+        elif name.lower() == "bash":
+            cmd = inp.get("command", "")
+            _log_to_display(f"🔧 BASH  $ {cmd[:300]}")
             if on_event:
                 await on_event({"type": "tool_use", "tool": name, "input": inp})
+                await on_event({"type": "activity_log", "text": f"🔧 BASH\n  $ {cmd[:300]}"})
+        elif name.lower() == "websearch":
+            q = inp.get("query", "")
+            _log_to_display(f"🔍 WEBSEARCH: {q[:120]}")
+            if on_event:
+                await on_event({"type": "tool_use", "tool": name, "input": inp})
+                await on_event({"type": "activity_log", "text": f"🔍 WEBSEARCH: {q[:120]}"})
+        elif name.lower() == "webfetch":
+            url = inp.get("url", "")
+            _log_to_display(f"🌐 WEBFETCH: {url[:120]}")
+            if on_event:
+                await on_event({"type": "tool_use", "tool": name, "input": inp})
+                await on_event({"type": "activity_log", "text": f"🌐 WEBFETCH: {url[:120]}"})
+        else:
+            _log_to_display(f"🛠  {name}: {json.dumps(inp)[:120]}")
+            if on_event:
+                await on_event({"type": "tool_use", "tool": name, "input": inp})
+                await on_event({"type": "activity_log", "text": f"🛠  {name}: {json.dumps(inp)[:120]}"})
 
-        # ── Scrot screenshot for WebSearch/WebFetch (open URL in Chromium first)
+        # ── Open URL in Chromium so it's visible in the video feed ──────────
         if name.lower() == "websearch":
             q = inp.get("query", "")
             await _open_url_in_chromium(f"https://www.google.com/search?q={q.replace(' ', '+')}")
-            await asyncio.sleep(3)
-            await _emit_screenshot(on_event, cid, f"after WebSearch: {q[:50]}")
         elif name.lower() == "webfetch":
-            url = inp.get("url", "")
-            await _open_url_in_chromium(url)
-            await asyncio.sleep(3)
-            await _emit_screenshot(on_event, cid, f"after WebFetch: {url[:50]}")
-        elif name.lower() != "computer":
-            # Bash / Skill / etc — immediate scrot
-            await asyncio.sleep(0.5)
-            await _emit_screenshot(on_event, cid, f"after {name}")
-        # Computer tool: screenshot comes back natively through ToolResultBlock — handled below
+            await _open_url_in_chromium(inp.get("url", ""))
 
     elif "toolresult" in mt or "tool_result" in mt:
         # ToolResultBlock.content is str | list[dict] | None
@@ -384,8 +409,9 @@ async def _process_message(
                 await _process_message(block, on_event, cid, counters)
 
     elif "thinking" in mt:
+        thinking_text = getattr(message, "thinking", None) or getattr(message, "text", None)
         if on_event:
-            await on_event({"type": "thinking"})
+            await on_event({"type": "thinking", "text": thinking_text or ""})
 
     elif "assistant" in mt or "user" in mt:
         content = getattr(message, "content", [])
@@ -397,8 +423,13 @@ async def _process_message(
         counters["turns"] += 1
         result_text = getattr(message, "result", getattr(message, "text", str(message)))
         logger.info(f"[{cid}] RESULT turn={counters['turns']}: {str(result_text)[:100]}")
+        # Write result preview to xterm log (first 400 chars)
+        result_preview = str(result_text)[:300].replace("\n", " ").strip()
+        _log_to_display(f"→ {result_preview}")
+        _log_to_display("─" * 60)
         if on_event:
             await on_event({"type": "result", "text": str(result_text)})
+            await on_event({"type": "activity_log", "text": f"→ {result_preview}\n{'─'*60}"})
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +476,14 @@ async def run_agent(
         max_turns=MAX_TURNS,
     )
 
+    _log_to_display("=" * 60)
+    _log_to_display(f"QUERY: {query_text}")
+    _log_to_display(f"SKILLS: {', '.join(skills.keys()) or 'none'}")
+    _log_to_display("=" * 60)
+
     if on_event:
+        await on_event({"type": "activity_log",
+                        "text": f"{'='*60}\nQUERY: {query_text}\nSKILLS: {', '.join(skills.keys()) or 'none'}\n{'='*60}"})
         await on_event({
             "type": "agent_started",
             "session_id": session_id,

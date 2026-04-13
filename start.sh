@@ -21,7 +21,7 @@ export DISPLAY=$DISPLAY_NUM
 sleep 1
 echo "      Display ready: DISPLAY=$DISPLAY"
 
-# ── 2. Chromium on virtual display ───────────────────────────────────────────
+# ── 2. Chromium — full display (video shows only browser, log is in HTML) ─────
 echo "[2/4] Launching Chromium on virtual display..."
 chromium \
     --no-sandbox \
@@ -34,7 +34,7 @@ chromium \
     about:blank &
 CHROMIUM_PID=$!
 sleep 2
-echo "      Chromium ready"
+echo "      Chromium ready (full display)"
 
 # ── 3. ffmpeg: record display → HLS stream + MP4 file ─────────────────────────
 echo "[3/4] Starting ffmpeg (HLS stream + MP4 recording)..."
@@ -49,12 +49,13 @@ ffmpeg \
     -preset ultrafast \
     -tune zerolatency \
     -pix_fmt yuv420p \
-    -g 30 \
+    -g 15 \
+    -keyint_min 15 \
     -sc_threshold 0 \
     -f hls \
-        -hls_time 2 \
-        -hls_list_size 10 \
-        -hls_flags delete_segments+append_list \
+        -hls_time 1 \
+        -hls_list_size 6 \
+        -hls_flags delete_segments+append_list+omit_endlist \
         $HLS_DIR/stream.m3u8 \
     -c:v libx264 \
     -preset ultrafast \
