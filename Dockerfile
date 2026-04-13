@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         scrot \
         ffmpeg \
         xterm \
+        xdotool \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Non-root user (Claude Code CLI refuses bypassPermissions as root) ─────────

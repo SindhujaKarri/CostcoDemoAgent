@@ -5,8 +5,11 @@ Tools:
 1. read_retail_data   - Load inventory / PO / store data from Excel files
 2. log_escalation     - Persist escalation events to a local JSONL log
 3. get_stockout_summary - Quick cross-table stockout summary for a SKU/region
+4. computer_use       - GUI automation: screenshot / click / type / key / scroll
 """
 
+import asyncio
+import base64
 import os
 import json
 import logging
@@ -291,8 +294,135 @@ async def get_stockout_summary(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# MCP Server
+# Tool 4 – computer_tool  (GUI automation on Xvfb virtual display)
 # ---------------------------------------------------------------------------
+_DISPLAY = os.environ.get("DISPLAY", "")
+_SS_PATH = "/tmp/computer_tool_ss.png"
+
+
+@tool(
+    name="computer_tool",
+    description=(
+        "Interact with the virtual desktop GUI. "
+        "Actions: 'screenshot' (capture screen), 'left_click' (click at x,y), "
+        "'right_click' (right-click at x,y), 'double_click' (double-click at x,y), "
+        "'type' (type text), 'key' (press a key combo e.g. 'ctrl+l'), "
+        "'scroll' (scroll at x,y by delta_y lines), 'mouse_move' (move to x,y). "
+        "For screenshot: no extra params needed. "
+        "For click/move/scroll: provide coordinate as [x, y]. "
+        "For type: provide text. For key: provide key string."
+    ),
+    input_schema={
+        "action": str,
+        "coordinate": Optional[List[int]],
+        "text": Optional[str],
+        "key": Optional[str],
+        "delta_y": Optional[int],
+    },
+)
+async def computer_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+    action = args.get("action", "screenshot")
+    coordinate = args.get("coordinate")
+    text = args.get("text", "")
+    key = args.get("key", "")
+    delta_y = args.get("delta_y", 3)
+
+    display = _DISPLAY or ":0"
+
+    env = {**os.environ, "DISPLAY": display}
+
+    async def run(cmd: List[str]) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        _, stderr = await proc.communicate()
+        return stderr.decode(errors="replace").strip()
+
+    try:
+        if action == "screenshot":
+            err = await run(["scrot", "-z", _SS_PATH])
+            if not Path(_SS_PATH).exists():
+                return {"content": [{"type": "text", "text": f"screenshot failed: {err}"}]}
+            data = base64.b64encode(Path(_SS_PATH).read_bytes()).decode()
+            return {
+                "content": [
+                    {"type": "image", "data": data, "mimeType": "image/png"},
+                    {"type": "text", "text": "Screenshot captured."},
+                ]
+            }
+
+        elif action in ("left_click", "right_click", "double_click", "mouse_move"):
+            if not coordinate or len(coordinate) < 2:
+                return {"content": [{"type": "text", "text": "coordinate [x, y] required"}]}
+            x, y = coordinate[0], coordinate[1]
+            await run(["xdotool", "mousemove", "--sync", str(x), str(y)])
+            if action == "left_click":
+                await run(["xdotool", "click", "1"])
+            elif action == "right_click":
+                await run(["xdotool", "click", "3"])
+            elif action == "double_click":
+                await run(["xdotool", "click", "--repeat", "2", "1"])
+            # Take a screenshot after each action so Claude can see the result
+            err = await run(["scrot", "-z", _SS_PATH])
+            if Path(_SS_PATH).exists():
+                data = base64.b64encode(Path(_SS_PATH).read_bytes()).decode()
+                return {
+                    "content": [
+                        {"type": "image", "data": data, "mimeType": "image/png"},
+                        {"type": "text", "text": f"{action} at ({x},{y}) done."},
+                    ]
+                }
+            return {"content": [{"type": "text", "text": f"{action} at ({x},{y}) done."}]}
+
+        elif action == "type":
+            if not text:
+                return {"content": [{"type": "text", "text": "text required for type action"}]}
+            await run(["xdotool", "type", "--clearmodifiers", "--", text])
+            return {"content": [{"type": "text", "text": f"Typed: {text[:80]}"}]}
+
+        elif action == "key":
+            k = key or text
+            if not k:
+                return {"content": [{"type": "text", "text": "key required"}]}
+            await run(["xdotool", "key", "--clearmodifiers", k])
+            # Screenshot after key so Claude sees result
+            err = await run(["scrot", "-z", _SS_PATH])
+            if Path(_SS_PATH).exists():
+                data = base64.b64encode(Path(_SS_PATH).read_bytes()).decode()
+                return {
+                    "content": [
+                        {"type": "image", "data": data, "mimeType": "image/png"},
+                        {"type": "text", "text": f"Key pressed: {k}"},
+                    ]
+                }
+            return {"content": [{"type": "text", "text": f"Key pressed: {k}"}]}
+
+        elif action == "scroll":
+            if not coordinate or len(coordinate) < 2:
+                return {"content": [{"type": "text", "text": "coordinate [x, y] required for scroll"}]}
+            x, y = coordinate[0], coordinate[1]
+            await run(["xdotool", "mousemove", "--sync", str(x), str(y)])
+            btn = "5" if (delta_y or 0) > 0 else "4"
+            for _ in range(abs(delta_y or 3)):
+                await run(["xdotool", "click", btn])
+            return {"content": [{"type": "text", "text": f"Scrolled at ({x},{y}) delta={delta_y}"}]}
+
+        else:
+            return {"content": [{"type": "text", "text": f"Unknown action: {action}"}]}
+
+    except Exception as exc:
+        logger.exception(f"computer_tool error: {exc}")
+        return {"content": [{"type": "text", "text": f"computer_tool error: {exc}"}]}
+
+
+# ---------------------------------------------------------------------------
+# MCP Servers
+# ---------------------------------------------------------------------------
+
+# Retail data tools
 AGENT_MCP_SERVER = create_sdk_mcp_server(
     name="retail-tools",
     tools=[read_retail_data, log_escalation, get_stockout_summary],
@@ -303,3 +433,12 @@ ALLOWED_MCP_TOOLS = [
     "mcp__retail-tools__log_escalation",
     "mcp__retail-tools__get_stockout_summary",
 ]
+
+# Desktop / computer tool — generic, available whenever DISPLAY is set
+DESKTOP_MCP_SERVER = create_sdk_mcp_server(
+    name="desktop",
+    tools=[computer_tool],
+) if _DISPLAY else None
+
+if _DISPLAY:
+    ALLOWED_MCP_TOOLS.append("mcp__desktop__computer_tool")

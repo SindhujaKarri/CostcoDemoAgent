@@ -44,6 +44,7 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 from claude_agent_sdk import query, ClaudeAgentOptions
+from tools import AGENT_MCP_SERVER, DESKTOP_MCP_SERVER, ALLOWED_MCP_TOOLS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -281,7 +282,7 @@ Available scripts (run with `python`):
 | **WebFetch** | Fetch and read a specific URL in full |
 | **Bash** | Run Python, shell commands, data scripts, calculations |
 | **Skill** | Invoke loaded skill decision logic |
-| **Computer** | GUI automation on the virtual desktop — `screenshot`, `click`, `type`, `key`, `scroll` {computer_status}. Use this to visually browse websites, click buttons, fill forms, and see what's on screen. |
+| **mcp__desktop__computer_tool** | GUI automation on the virtual desktop — `screenshot`, `left_click`, `type`, `key`, `scroll` {computer_status}. Use this to visually browse websites, click buttons, fill forms, and see what's on screen. |
 
 ---
 ## EXECUTION RULES
@@ -291,6 +292,8 @@ Available scripts (run with `python`):
 - Chain tools logically: each step's output informs the next step.
 - Cite all web sources at the end.
 - For retail queries: always check if escalation rules (E1–E8) are triggered and log them.
+- **GUI automation**: ONLY use `mcp__desktop__computer_tool` for screenshots, clicks, and typing. NEVER call `scrot`, `xdotool`, or `import` directly via Bash for GUI interaction — those run on a separate process and may fail. The computer_tool handles all display interaction correctly.
+- **Display**: The virtual desktop runs on `DISPLAY=:1`. The computer_use tool is already configured for this — no need to specify it manually.
 {skills_prompt}
 """
 
@@ -302,8 +305,7 @@ Available scripts (run with `python`):
 def _build_allowed_tools() -> List[str]:
     tools = ["Bash", "Read", "Write", "Edit", "Glob", "Grep",
              "Skill", "WebSearch", "WebFetch"]
-    if ENABLE_COMPUTER_TOOL:
-        tools.append("Computer")
+    tools.extend(ALLOWED_MCP_TOOLS)
     return tools
 
 
@@ -387,6 +389,13 @@ async def _process_message(
             if on_event:
                 await on_event({"type": "tool_use", "tool": name, "input": inp})
                 await on_event({"type": "activity_log", "text": f"🌐 WEBFETCH: {url[:120]}"})
+        elif "computer_tool" in name.lower():
+            action = inp.get("action", "")
+            detail = inp.get("text") or inp.get("coordinate") or inp.get("key") or ""
+            _log_to_display(f"🖥  COMPUTER: {action} {str(detail)[:80]}")
+            if on_event:
+                await on_event({"type": "tool_use", "tool": name, "input": inp})
+                await on_event({"type": "activity_log", "text": f"🖥  COMPUTER: {action} {str(detail)[:80]}"})
         else:
             _log_to_display(f"🛠  {name}: {json.dumps(inp)[:120]}")
             if on_event:
@@ -472,6 +481,10 @@ async def run_agent(
         model=CLAUDE_MODEL,
         system_prompt=system_prompt,
         allowed_tools=allowed_tools,
+        mcp_servers={
+            "retail-tools": AGENT_MCP_SERVER,
+            **( {"desktop": DESKTOP_MCP_SERVER} if DESKTOP_MCP_SERVER else {} ),
+        },
         permission_mode=PERMISSION_MODE,
         max_turns=MAX_TURNS,
     )
@@ -495,19 +508,38 @@ async def run_agent(
     try:
         async for message in query(prompt=query_text, options=options):
             await _process_message(message, on_event, cid, counters)
-            if "result" in _msg_type(message):
-                final_response = str(
-                    getattr(message, "result", getattr(message, "text", final_response))
-                )
+            mt = _msg_type(message)
+            if "result" in mt:
+                # ResultMessage may carry is_error=True when the last tool failed.
+                # That is a tool-level outcome, not a fatal crash — capture the text
+                # but only treat it as a hard error if there's no partial response yet.
+                is_err = getattr(message, "is_error", False)
+                result_val = getattr(message, "result", getattr(message, "text", None))
+                if result_val is not None:
+                    final_response = str(result_val)
+                if is_err and not final_response:
+                    agent_error = str(result_val)
+                    logger.warning(f"[{cid}] ResultMessage is_error=True: {agent_error[:120]}")
     except BaseException as exc:
         # Unwrap ExceptionGroup (Python 3.11+ / anyio TaskGroup errors)
-        if hasattr(exc, "exceptions"):
-            agent_error = "; ".join(str(e) for e in exc.exceptions)
+        inner = exc
+        if hasattr(exc, "exceptions") and exc.exceptions:
+            inner = exc.exceptions[0]
+        err_msg = str(inner)
+
+        # "Command failed with exit code N" is a tool failure, not a Python crash.
+        # Log it but don't surface it as a fatal error if we already have a response.
+        if "exit code" in err_msg.lower() or "command failed" in err_msg.lower():
+            logger.warning(f"[{cid}] Tool exited non-zero (non-fatal): {err_msg[:120]}")
+            if not final_response:
+                agent_error = err_msg
+                if on_event:
+                    await on_event({"type": "error", "error": agent_error})
         else:
-            agent_error = str(exc)
-        logger.error(f"[{cid}] Agent error: {agent_error}")
-        if on_event:
-            await on_event({"type": "error", "error": agent_error})
+            agent_error = err_msg
+            logger.error(f"[{cid}] Agent error: {agent_error}")
+            if on_event:
+                await on_event({"type": "error", "error": agent_error})
 
     if agent_error:
         return {
