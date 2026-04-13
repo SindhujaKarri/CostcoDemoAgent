@@ -1,0 +1,31 @@
+# ── Python bytecode ──────────────────────────────────────────────────────────
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+*.egg-info/
+dist/
+build/
+
+# ── Secrets — NEVER bake into image; inject via ECS task definition or -e flag
+agent/.env
+
+# ── Git
+.git/
+.gitignore
+
+# ── IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── Local virtual environments
+venv/
+env/
+.venv/
+__pypackages__/
+
+# ── Test / dev artefacts
+*.log
+escalations.jsonl

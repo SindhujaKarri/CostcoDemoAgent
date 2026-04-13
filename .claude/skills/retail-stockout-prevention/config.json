@@ -1,0 +1,71 @@
+{
+  "name": "retail-stockout-prevention",
+  "description": "Multi-region stockout prevention skill for RetailCo supply chain. Classifies supply disruptions, diagnoses warehouse and PO bottlenecks, checks competitor and weather signals, and recommends actions with guardrails.",
+  "version": "1.0",
+  "owner": {
+    "name": "Rachel Torres",
+    "title": "VP Supply Chain Operations",
+    "experience_years": 18,
+    "organization": "RetailCo"
+  },
+  "trust_level": 1,
+  "trust_label": "supervised",
+  "created": "2026-03-27",
+  "source": "QDojo Knowledge Capture Interview",
+  "runs": 847,
+  "accuracy": 0.942,
+
+  "trigger": {
+    "condition": "6+ stores in same region below reorder_level on same SKU",
+    "tables_monitored": ["fact_inventory", "dim_store", "dim_product", "dim_region"],
+    "check_interval_minutes": 15
+  },
+
+  "files": [
+    { "name": "SKILL.md", "type": "decision_logic", "description": "Core 8-step decision sequence for stockout prevention" },
+    { "name": "tribal-knowledge.md", "type": "heuristics", "description": "Rachel's operational rules — not in any SOP or dashboard" },
+    { "name": "escalation.md", "type": "escalation_rules", "description": "When and to whom to escalate, with timelines and trust levels" },
+    { "name": "signals.md", "type": "monitoring", "description": "External web sources and internal data signals to check" }
+  ],
+
+  "data_sources": {
+    "internal": [
+      "fact_inventory", "dim_store", "dim_product", "dim_brand",
+      "dim_region", "dim_warehouse", "dim_supplier",
+      "fact_purchase_order", "fact_return", "dim_return_reason",
+      "blob_customer_feedback"
+    ],
+    "external": [
+      "weather.gov", "bestbuy.com", "target.com", "walmart.com",
+      "bls.gov/cpi", "supplier portals"
+    ]
+  },
+
+  "guardrails": {
+    "autonomous_threshold_usd": 500000,
+    "escalation_time_hours": 48,
+    "perishable_escalation_hours": 24,
+    "min_days_supply_for_transfer": 7,
+    "block_transfers_during_disruption": true,
+    "private_label_severity_threshold_stores": 3,
+    "supplier_late_delivery_flag_count": 2,
+    "supplier_late_delivery_window_days": 90,
+    "supplier_min_rating_for_auto_reorder": 3.0,
+    "draft_po_alert_days": 3
+  },
+
+  "private_label_brands": {
+    "severity_1": { "brand_id": 11, "brand_name": "RetailCorp Brand", "customer_migration_risk": 0.30 },
+    "standard": { "brand_id": 12, "brand_name": "Value Choice", "customer_migration_risk": 0.05 }
+  },
+
+  "warehouse_mapping": {
+    "NA-EAST":  { "warehouse_id": 1, "code": "WH-EAST-01",  "city": "Newark",       "state": "NJ" },
+    "NA-WEST":  { "warehouse_id": 2, "code": "WH-WEST-01",  "city": "Los Angeles",  "state": "CA" },
+    "NA-CENT":  { "warehouse_id": 3, "code": "WH-CENT-01",  "city": "Chicago",      "state": "IL" },
+    "NA-SOUTH": { "warehouse_id": 4, "code": "WH-SOUTH-01", "city": "Dallas",       "state": "TX" },
+    "COLD":     { "warehouse_id": 5, "code": "WH-COLD-01",  "city": "Philadelphia", "state": "PA" },
+    "EU-WEST":  { "warehouse_id": 6, "code": "WH-EU-01",    "city": "London",       "state": null },
+    "APAC":     { "warehouse_id": 7, "code": "WH-APAC-01",  "city": "Tokyo",        "state": null }
+  }
+}

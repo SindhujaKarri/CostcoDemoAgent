@@ -1,0 +1,20 @@
+# Anthropic
+anthropic
+claude-agent-sdk
+
+# Web framework + WebSocket
+fastapi
+uvicorn[standard]
+
+# Data processing
+pandas
+openpyxl          # Excel file reading
+
+# AWS (S3 skill loading)
+boto3
+
+# Utilities
+python-dotenv
+pydantic
+requests
+aiofiles
